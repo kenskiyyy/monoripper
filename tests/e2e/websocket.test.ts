@@ -319,7 +319,8 @@ test('trusted proxies keep X-Forwarded-For and resolve the client address', asyn
 })
 
 test('a client that stops reading is closed at maxBufferedBytes and the gateway keeps serving', async () => {
-  const bounded = await start({ http: { port: 0, websocket: { maxMessageBytes: 64 * 1024, maxBufferedBytes: 256 * 1024 } }, admin: { port: 0 } })
+  // Bun 1.3 keeps delivering after pause() until maxBufferedBytes is exceeded; Bun 1.4 stops at once, so the idle limit closes the client.
+  const bounded = await start({ http: { port: 0, websocket: { maxMessageBytes: 64 * 1024, maxBufferedBytes: 256 * 1024, idleTimeoutSeconds: 1 } }, admin: { port: 0 } })
   try {
     const stalled = await rawClient(bounded, '/live/echo')
     expect(stalled.first).toBe('ready')

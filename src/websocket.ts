@@ -263,6 +263,8 @@ export class WebSocketRelay {
   private pending: Uint8Array[] = []
   private pendingBytes = 0
   private paused = true
+  /** When client backpressure last paused the replica; undefined while reading or before attach. */
+  private pausedSince?: number
   private sentClose = false
   private receivedClose = false
   private clientClosing = false
@@ -364,12 +366,18 @@ export class WebSocketRelay {
   }
   private heartbeat() {
     if (this.sentClose) return // No pings after a close frame (RFC 6455 §5.5.1).
-    // A paused relay does not read the replica, so silence then reflects the client, which maxBufferedBytes bounds.
-    if (this.paused) { this.lastHeard = performance.now(); return }
+    // A paused relay does not read the replica, so silence then reflects the client. maxBufferedBytes bounds what a
+    // paused relay holds, but Bun 1.4 stops delivering at pause(), so that limit alone is never reached: a client
+    // that has not drained for idleTimeoutMs is closed as a backpressure overflow instead.
+    if (this.paused) {
+      if (this.pausedSince !== undefined && performance.now() - this.pausedSince > this.limits.idleTimeoutMs) { this.overflow(); return }
+      this.lastHeard = performance.now()
+      return
+    }
     if (performance.now() - this.lastHeard > this.limits.idleTimeoutMs) { this.socket.terminate(); return }
     this.write(clientFrame(9, new Uint8Array(0)))
   }
-  private resume() { this.paused = false; this.socket.resume(); this.parse() }
+  private resume() { this.paused = false; this.pausedSince = undefined; this.socket.resume(); this.parse() }
   private write(bytes: Uint8Array) {
     if (this.finished) return
     if (this.pendingBytes) { this.pending.push(bytes); this.pendingBytes += bytes.length }
@@ -389,7 +397,7 @@ export class WebSocketRelay {
   /** Nothing more goes to the client, so stop honouring its backpressure and read the replica's close reply. */
   private markClientClosing() {
     this.clientClosing = true
-    if (this.paused && this.client) { this.paused = false; this.socket.resume(); queueMicrotask(() => this.guard(() => this.parse())) }
+    if (this.paused && this.client) { this.paused = false; this.pausedSince = undefined; this.socket.resume(); queueMicrotask(() => this.guard(() => this.parse())) }
   }
   private sendClose(code: number | undefined, reason: string) {
     if (this.sentClose) return
@@ -424,6 +432,6 @@ export class WebSocketRelay {
   private deliver(data: string | Uint8Array) {
     if (this.clientClosing || !this.client) return
     const status = typeof data === 'string' ? this.client.sendText(data) : this.client.sendBinary(data)
-    if (status === -1) { this.paused = true; this.socket.pause() }
+    if (status === -1) { this.paused = true; this.pausedSince ??= performance.now(); this.socket.pause() }
   }
 }

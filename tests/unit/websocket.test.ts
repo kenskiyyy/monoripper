@@ -253,16 +253,45 @@ describe('WebSocketRelay', () => {
     expect(socket.ended).toBe(true)
   })
   test('review: no pings after a close frame, and a paused relay is not declared lost', async () => {
-    const paused = relay({ idleTimeoutMs: 40 })
+    const paused = relay({ idleTimeoutMs: 100 })
     paused.client.status = -1
     paused.relay.receive(frame(2, new Uint8Array(1)))
-    await Bun.sleep(120)
+    await Bun.sleep(70) // A heartbeat ran (every 50 ms) but the client has not been stalled for idleTimeoutMs yet.
     expect(paused.socket.terminated).toBe(false)
+    expect(paused.client.closed).toBeUndefined()
     const closing = relay({ idleTimeoutMs: 40, closeTimeoutMs: 60_000 })
     closing.relay.clientClosed(1000, '')
     await Bun.sleep(60)
     expect(closing.socket.frames.map(f => f.opcode)).toEqual([8])
     paused.relay.lost(); closing.relay.lost()
+  })
+  // Bun 1.4 stops delivering at pause(), so maxBufferedBytes is never exceeded; the time limit bounds the stall instead.
+  test('a client that stays backpressured for idleTimeoutMs is closed with 1013, not treated as a lost replica', async () => {
+    const { relay: r, socket, client, done } = relay({ idleTimeoutMs: 40 })
+    client.status = -1
+    r.receive(frame(2, new Uint8Array(1)))
+    expect(socket.paused).toBe(true)
+    await Bun.sleep(120)
+    expect(client.closed).toEqual([1013, 'Backpressure'])
+    expect(socket.terminated).toBe(true)
+    r.lost() // The terminated socket reports its close; the reason recorded first wins.
+    expect(done).toEqual(['backpressure'])
+  })
+  test('a client that drains in time is not closed, however often it stalls', async () => {
+    const { relay: r, socket, client, done } = relay({ idleTimeoutMs: 80 })
+    for (let round = 0; round < 4; round++) {
+      client.status = -1
+      r.receive(frame(2, new Uint8Array(1)))
+      expect(socket.paused).toBe(true)
+      await Bun.sleep(50) // Shorter than idleTimeoutMs; the sum over all rounds is longer.
+      client.status = 1
+      r.clientDrained()
+      await Bun.sleep(5)
+      expect(socket.paused).toBe(false)
+    }
+    expect(client.closed).toBeUndefined()
+    expect(done).toEqual([])
+    r.lost()
   })
   test('attach after the replica is gone closes the client with 1012, or 1001 after goAway', () => {
     const lost = new WebSocketRelay(new FakeSocket(), { maxMessageBytes: 1024, maxBufferedBytes: 4096, closeTimeoutMs: 50, idleTimeoutMs: 60_000 }, new Uint8Array(0))

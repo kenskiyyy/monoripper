@@ -10,7 +10,7 @@ request context with explicit cross-context calls, and bounded autoscaling. See 
 
 ## Requirements
 
-Verified environment: Linux, Bun **1.3.13**, Elysia **1.4.30**.
+Verified environment: Linux, Bun **1.3.13** and **1.4.2**, Elysia **1.4.30**. The container image, the Nix flake and `bun.nix` still pin Bun 1.3.13.
 With Nix, `nix develop` provides the pinned Bun, bun2nix, and Python. The flake pins nixpkgs `nixos-26.05` and fails evaluation if its Bun differs from `.bun-version`.
 `elysia` is an exact peer dependency, so the application and the runtime share one Elysia copy.
 Install project dependencies with Bun, not npm.
@@ -214,12 +214,13 @@ http: { websocket: { maxMessageBytes: 1048576, maxConnections: 1024, idleTimeout
   A socket that exceeds it closes with 1013 (try again later) instead of growing or dropping messages, so the worst case is about 3 × `maxBufferedBytes` per socket plus kernel socket buffers.
   Budget memory as `maxConnections × maxBufferedBytes × 3`.
 - Keepalive: the gateway pings idle clients and the relay pings its replica. A peer that stays silent for `idleTimeoutSeconds` (1–960) is closed; a silent replica counts as lost (1012).
+  A client that does not drain for that long while the relay waits for it is closed with 1013 as well. Bun 1.3 delivers data after a pause, so `maxBufferedBytes` closes such a client first; Bun 1.4 stops at once, so this time limit does.
 - Lifecycle: scale-down/drain and runtime shutdown close the affected sockets with 1001 (going away) and wait for them within `shutdownTimeoutMs`. A replica that exits closes its sockets with 1012 (service restart); an invalid frame from the replica closes with 1011. Clients should reconnect on 1001, 1011, 1012 and 1013.
 - Containment: an internal relay error closes only the affected socket with 1011 (`reason="internal_error"`); it never reaches the gateway process or other traffic.
 - `ws.publish()` reaches subscribers of the same replica only. With several replicas, deliver change events to each replica (for example a database notification in a resource) and publish locally.
 
 The replica-side client passes the [Autobahn TestSuite](https://github.com/crossbario/autobahn-testsuite) (301 cases, compression excluded): `nix shell nixpkgs#podman -c bun run test:autobahn` (opt-in, needs rootless Podman, pinned image digest).
-`tests/compat/bun-websocket.test.ts` holds canaries for the Bun 1.3.13 quirks the relay works around; a failing canary after a Bun upgrade names the workaround to revisit.
+`tests/compat/bun-websocket.test.ts` holds canaries for the Bun quirks the relay works around; a failing canary after a Bun upgrade names the workaround to revisit. Bun 1.4 fixed several of them; each canary expects the behaviour of the Bun version that runs it, and the workarounds stay because they are harmless on 1.4.
 
 Streaming HTTP responses, including Server-Sent Events, pass through without buffering. They are ordinary requests: `lifecycle.requestTimeoutMs` still bounds the whole response, so use WebSockets for connections that stay open.
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Bun 1.4 support
+
+The full suite (159 tests), typecheck, build and package smoke test pass on Bun 1.3.13 and 1.4.2.
+
+- The WebSocket relay closes a client that has not drained for `idleTimeoutMs` with 1013 (`backpressure`). Bun 1.4 stops delivering data at `pause()`, so the `maxBufferedBytes` check alone no longer ended a stalled client.
+- The Bun WebSocket canaries expect the behaviour of the running Bun version. Bun 1.4 fixed: graceful `stop()` settling after an upgrade, forced `stop()` hanging, a lost `drain`, the reported 1001 close code, and `pendingWebSockets` after a server close. The workarounds stay.
+- Tests: gRPC status checks use `tests/helpers/rejection.ts` instead of `expect(...).rejects`, which on Bun 1.4.2 returned DEADLINE_EXCEEDED for a call that had already failed with its real status.
+- Not changed, because they could not be verified here: the Dockerfile and container test image digests, `flake.nix`/`.bun-version` (nixpkgs `nixos-26.05` ships Bun 1.3.13 and the flake requires them to match), and `bun.nix`.
+
 ## 0.1.0-prototype
 
 First prototype of the full release plan (e01–e03). All APIs are provisional. Automated checks pass; user acceptance is pending.

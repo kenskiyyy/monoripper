@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { connectControl, defineApp, monoripper } from '../../src/index'
 import { until } from '../helpers/control'
+import { rejection } from '../helpers/rejection'
 
 const root = join(import.meta.dir, '../fixtures/autoscale')
 const app = defineApp({ project: 'autoscale', contexts: { work: { entry: './slow.ts', owns: [{ method: 'GET', path: '/work/*' }] } } })
@@ -23,9 +24,9 @@ test('synthetic load scales replicas up within max; a quiet window scales back t
   try {
     expect(await client.setAutoscale('work', { min: 1, max: 3, targetInFlight: 2 })).toMatchObject({ context: 'work', policy: { min: 1, max: 3, targetInFlight: 2 } })
     expect(replicas().autoscale).toEqual({ min: 1, max: 3, targetInFlight: 2 })
-    await expect(client.setContext({ context: 'work', replicas: 2, requestId: 'manual-while-auto', expectedRevision: (await client.getStatus()).revision }))
-      .rejects.toMatchObject({ code: grpc.status.FAILED_PRECONDITION })
-    await expect(client.setAutoscale('work', { min: 3, max: 2, targetInFlight: 1 })).rejects.toMatchObject({ code: grpc.status.INVALID_ARGUMENT })
+    expect(await rejection(client.setContext({ context: 'work', replicas: 2, requestId: 'manual-while-auto', expectedRevision: (await client.getStatus()).revision })))
+      .toMatchObject({ code: grpc.status.FAILED_PRECONDITION })
+    expect(await rejection(client.setAutoscale('work', { min: 3, max: 2, targetInFlight: 1 }))).toMatchObject({ code: grpc.status.INVALID_ARGUMENT })
 
     // About 10 requests in flight for target 2 per replica wants 5 replicas; max caps it at 3.
     const load = Promise.all(Array.from({ length: 10 }, async () => { while (loading) await fetch(new URL('/work/slow?ms=150', runtime.url)).then(r => r.arrayBuffer()) }))

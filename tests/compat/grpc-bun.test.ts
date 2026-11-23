@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import * as grpc from '@grpc/grpc-js'
+import { rejection } from '../helpers/rejection'
 
 const encode = (value: unknown) => Buffer.from(JSON.stringify(value))
 const decode = (value: Buffer) => JSON.parse(value.toString())
@@ -38,8 +39,8 @@ test('Bun runs real gRPC server/client, metadata, errors, deadlines and shutdown
   })
   try {
     expect(await call({ message: 'hello' })).toEqual({ ok: true, value: { message: 'hello' } })
-    await expect(call({}, false)).rejects.toMatchObject({ code: grpc.status.PERMISSION_DENIED })
-    await expect(call({ slow: true }, true, 50)).rejects.toMatchObject({ code: grpc.status.DEADLINE_EXCEEDED })
+    expect(await rejection(call({}, false))).toMatchObject({ code: grpc.status.PERMISSION_DENIED })
+    expect(await rejection(call({ slow: true }, true, 50))).toMatchObject({ code: grpc.status.DEADLINE_EXCEEDED })
   } finally {
     client.close()
     server.forceShutdown()

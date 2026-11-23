@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { connectControl, monoripper } from '../../src/index'
 import { controlService } from '../../src/control-protocol'
 import { app, root } from '../helpers/control'
+import { rejection } from '../helpers/rejection'
 
 const tokenName = 'MONORIPPER_TEST_CONTROL_TOKEN'
 
@@ -19,9 +20,9 @@ test('protobuf gRPC authorizes, scales, replays, disables and exposes no admin c
   const bad = await connectControl({ address: runtime.controlAddress!, token: 'incorrect', project: app.project })
   const wrongScope = await connectControl({ address: runtime.controlAddress!, token, project: 'different-project' })
   try {
-    await expect(bad.getStatus()).rejects.toMatchObject({ code: grpc.status.UNAUTHENTICATED })
-    await expect(bad.setContext({ requestId: 'unauthorized-change', expectedRevision: 0, context: 'api', replicas: 0 })).rejects.toMatchObject({ code: grpc.status.UNAUTHENTICATED })
-    await expect(wrongScope.getStatus()).rejects.toMatchObject({ code: grpc.status.PERMISSION_DENIED })
+    expect(await rejection(bad.getStatus())).toMatchObject({ code: grpc.status.UNAUTHENTICATED })
+    expect(await rejection(bad.setContext({ requestId: 'unauthorized-change', expectedRevision: 0, context: 'api', replicas: 0 }))).toMatchObject({ code: grpc.status.UNAUTHENTICATED })
+    expect(await rejection(wrongScope.getStatus())).toMatchObject({ code: grpc.status.PERMISSION_DENIED })
     await expect(connectControl({ address: runtime.controlAddress!, project: app.project, token: 'PRIVATE_METADATA_VALUE\n' })).rejects.toMatchObject({ code: 'INVALID_CONFIG', message: 'Control credential must be a printable ASCII token without whitespace' })
     const port80 = await connectControl({ address: '127.0.0.1:80', token, project: app.project })
     port80.close()
@@ -34,8 +35,8 @@ test('protobuf gRPC authorizes, scales, replays, disables and exposes no admin c
     expect((await client.setContext(input)).id).toBe(operation.id)
     const status = await client.getStatus()
     expect(status.contexts.find(context => context.name === 'api')?.readyReplicas).toBe(3)
-    await expect(client.setContext({ ...input, requestId: 'conflict' })).rejects.toMatchObject({ code: grpc.status.ABORTED })
-    await expect(client.setContext({ ...input, replicas: 1 })).rejects.toMatchObject({ code: grpc.status.ALREADY_EXISTS })
+    expect(await rejection(client.setContext({ ...input, requestId: 'conflict' }))).toMatchObject({ code: grpc.status.ABORTED })
+    expect(await rejection(client.setContext({ ...input, replicas: 1 }))).toMatchObject({ code: grpc.status.ALREADY_EXISTS })
     const disabled = await client.setContext({ requestId: 'disable', expectedRevision: status.revision, context: 'api', replicas: 0 })
     expect((await client.waitOperation(disabled.id)).phase).toBe('succeeded')
     expect((await fetch(new URL('/api/pid', runtime.url))).status).toBe(503)
@@ -57,7 +58,7 @@ test('protobuf gRPC authorizes, scales, replays, disables and exposes no admin c
       const malformed = new Promise((resolve, reject) => wire.makeUnaryRequest(method.path, method.requestSerialize, method.responseDeserialize,
         { project: app.project, environment: 'development', requestId: 'missing-revision', context: 'api', replicas: 0 }, metadata,
         (error, value) => error ? reject(error) : resolve(value)))
-      await expect(malformed).rejects.toMatchObject({ code: grpc.status.INVALID_ARGUMENT })
+      expect(await rejection(malformed)).toMatchObject({ code: grpc.status.INVALID_ARGUMENT })
     } finally { wire.close() }
   } finally {
     client.close(); bad.close(); wrongScope.close()

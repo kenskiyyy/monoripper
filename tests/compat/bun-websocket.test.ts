@@ -1,6 +1,10 @@
-// Canaries for Bun 1.3.13 WebSocket behaviour that Monoripper works around. When one fails after a Bun
+// Canaries for Bun WebSocket behaviour that Monoripper works around. When one fails after a Bun
 // upgrade, the quirk changed: revisit the workaround named in the test, then update or delete the canary.
+// Bun 1.4 fixed the quirks marked below; the workarounds stay because they are harmless there and still needed on 1.3.
 import { expect, test } from 'bun:test'
+
+/** True when this Bun no longer has the 1.3 quirks marked `fixed in Bun 1.4` below. */
+const fixed = Bun.semver.satisfies(Bun.version, '>=1.4.0')
 
 type Server = ReturnType<typeof Bun.serve<object>>
 function upgrading(websocket: Bun.WebSocketHandler<object>, headers?: Record<string, string>): Server {
@@ -14,6 +18,7 @@ const open = (server: Server, protocols?: string[]) => new Promise<WebSocket>((r
   ws.onerror = () => reject(new Error('handshake failed'))
 })
 
+// Fixed in Bun 1.4: a graceful stop() now settles.
 test('canary: graceful server.stop() never settles once a WebSocket was upgraded (runtime.ts stop awaits only stop(true))', async () => {
   const server = upgrading({ message() {} })
   const ws = await open(server)
@@ -21,10 +26,11 @@ test('canary: graceful server.stop() never settles once a WebSocket was upgraded
   ws.close()
   await closed
   const graceful = server.stop(false)
-  expect(await Promise.race([graceful.then(() => 'settled'), Bun.sleep(300).then(() => 'pending')])).toBe('pending')
+  expect(await Promise.race([graceful.then(() => 'settled'), Bun.sleep(300).then(() => 'pending')])).toBe(fixed ? 'settled' : 'pending')
   await server.stop(true)
 })
 
+// Fixed in Bun 1.4: a forced stop() no longer hangs.
 test('canary: forced stop() hangs after a server-initiated close unless a graceful stop() ran first (runtime.ts stop order)', async () => {
   const stopAfterClose = async (gracefulFirst: boolean) => {
     const server = upgrading({ open(ws) { ws.close(1001, 'away') }, message() {} })
@@ -34,9 +40,10 @@ test('canary: forced stop() hangs after a server-initiated close unless a gracef
     return Promise.race([server.stop(true).then(() => 'stopped'), Bun.sleep(300).then(() => 'hung')])
   }
   expect(await stopAfterClose(true)).toBe('stopped')
-  expect(await stopAfterClose(false)).toBe('hung')
+  expect(await stopAfterClose(false)).toBe(fixed ? 'stopped' : 'hung')
 })
 
+// Fixed in Bun 1.4: sending inside drain() no longer loses the next drain.
 test('canary: sending again inside the drain callback misses the next drain (WebSocketRelay.clientDrained defers)', async () => {
   const chunk = new Uint8Array(256 * 1024)
   const run = async (defer: boolean) => {
@@ -52,7 +59,8 @@ test('canary: sending again inside the drain callback misses the next drain (Web
     return received
   }
   expect(await run(true)).toBe(100)
-  expect(await run(false)).toBeLessThan(100)
+  if (fixed) expect(await run(false)).toBe(100)
+  else expect(await run(false)).toBeLessThan(100)
 })
 
 test('canary: oversized client messages drop the connection with 1006, not 1009 (relay enforces maxMessageBytes itself)', async () => {
@@ -66,11 +74,12 @@ test('canary: oversized client messages drop the connection with 1006, not 1009 
   await shutdown(server)
 })
 
+// Fixed in Bun 1.4: clients report the real close code.
 test('canary: Bun clients report a received 1001 as 1000 (tests read raw close frames)', async () => {
   const server = upgrading({ open(ws) { ws.close(1001, 'away') }, message() {} })
   const ws = new WebSocket(`ws://127.0.0.1:${server.port}/`)
   const event = await new Promise<CloseEvent>(resolve => { ws.onclose = resolve })
-  expect([event.code, event.reason]).toEqual([1000, 'away'])
+  expect([event.code, event.reason]).toEqual([fixed ? 1001 : 1000, 'away'])
   await shutdown(server)
 })
 
@@ -82,12 +91,13 @@ test('canary: without a chosen subprotocol Bun selects the first offered one (do
   await shutdown(server)
 })
 
+// Fixed in Bun 1.4: the socket leaves pendingWebSockets.
 test('canary: a server-initiated close leaves the socket in pendingWebSockets (worker.ts stopServer waits on pendingRequests)', async () => {
   const server = upgrading({ open(ws) { ws.close(4401, 'x') }, message() {} })
   const ws = new WebSocket(`ws://127.0.0.1:${server.port}/`)
   await new Promise(resolve => { ws.onclose = resolve })
   await Bun.sleep(20)
-  expect(server.pendingWebSockets).toBe(1)
+  expect(server.pendingWebSockets).toBe(fixed ? 0 : 1)
   await shutdown(server)
 })
 
